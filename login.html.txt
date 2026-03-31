@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SAMU 192 — TI · Acesso</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+    :root{
+      --red:#E53935;--red-dark:#B71C1C;
+      --navy:#162540;
+      --bg:#EBF0FA;--card:#fff;--border:#D0D9EE;
+      --text:#0D1B2A;--text-2:#3A4E66;--text-3:#7A90A8;
+      --focus:0 0 0 3px rgba(229,57,53,.22);
+    }
+    html,body{height:100%;font-family:'IBM Plex Sans',system-ui,sans-serif;}
+    body{background:var(--bg);display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px;}
+    body::before{content:'';position:fixed;inset:0;pointer-events:none;
+      background:radial-gradient(ellipse 60% 50% at 15% 5%,rgba(229,57,53,.07),transparent 70%),
+                 radial-gradient(ellipse 50% 40% at 85% 95%,rgba(22,37,64,.1),transparent 70%);}
+    .card{width:100%;max-width:420px;background:var(--card);border:1px solid var(--border);
+      border-radius:14px;box-shadow:0 8px 40px rgba(13,27,64,.1);overflow:hidden;}
+    .hd{background:linear-gradient(155deg,var(--navy) 0%,#0A1525 100%);
+      padding:36px 32px 28px;display:flex;flex-direction:column;align-items:center;gap:16px;}
+    .logo{width:68px;height:68px;border-radius:50%;border:2px solid rgba(229,57,53,.3);
+      background:rgba(229,57,53,.1);display:flex;align-items:center;justify-content:center;position:relative;}
+    .logo-inner{width:24px;height:24px;border-radius:50%;background:var(--red);animation:pulse 2.4s ease infinite;}
+    @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(229,57,53,.55)}70%{box-shadow:0 0 0 12px rgba(229,57,53,0)}100%{box-shadow:0 0 0 0 rgba(229,57,53,0)}}
+    .logo::after{content:'';position:absolute;inset:-6px;border-radius:50%;border:1px solid rgba(229,57,53,.12);}
+    .hd-title{font-size:1.18rem;font-weight:700;color:#f0f6ff;letter-spacing:-.2px;}
+    .hd-sub{font-size:.75rem;color:#5A7EA8;text-align:center;}
+    .bd{padding:28px 32px 32px;}
+    .err{display:flex;align-items:flex-start;gap:9px;background:#FFF0F0;border:1px solid #fca5a5;
+      border-radius:9px;font-size:.81rem;color:#B71C1C;font-weight:500;
+      opacity:0;max-height:0;overflow:hidden;padding:0 14px;
+      transition:opacity .25s,max-height .3s,padding .25s,margin .25s;margin-bottom:0;}
+    .err.show{opacity:1;max-height:80px;padding:11px 14px;margin-bottom:18px;}
+    .err-dot{width:7px;height:7px;border-radius:50%;background:var(--red);flex-shrink:0;margin-top:3px;}
+    .field{margin-bottom:18px;}
+    .lbl{display:block;font-size:.72rem;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--text-2);margin-bottom:7px;}
+    .fw{position:relative;}
+    .fi-ico{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--text-3);pointer-events:none;display:flex;align-items:center;}
+    input[type=text],input[type=password]{width:100%;border:1.5px solid var(--border);border-radius:9px;
+      padding:11px 40px 11px 38px;font-family:inherit;font-size:.9rem;color:var(--text);
+      background:var(--bg);outline:none;transition:border-color .18s,box-shadow .18s;}
+    input:focus{border-color:var(--red);box-shadow:var(--focus);}
+    input.err-f{border-color:var(--red);}
+    input.shake{animation:shake .42s ease both;}
+    @keyframes shake{0%{transform:none}20%{transform:translateX(-7px)}40%{transform:translateX(7px)}60%{transform:translateX(-4px)}80%{transform:translateX(4px)}100%{transform:none}}
+    .eye{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-3);padding:4px;display:flex;align-items:center;transition:color .18s;}
+    .eye:hover{color:var(--text);}
+    .btn-e{width:100%;background:var(--red);color:#fff;border:none;padding:13px 20px;border-radius:9px;
+      font-family:inherit;font-size:.9rem;font-weight:700;letter-spacing:.4px;cursor:pointer;
+      display:flex;align-items:center;justify-content:center;gap:10px;margin-top:6px;
+      transition:background .18s,box-shadow .18s,transform .12s;}
+    .btn-e:hover:not(:disabled){background:var(--red-dark);box-shadow:0 4px 16px rgba(229,57,53,.28);}
+    .btn-e:active:not(:disabled){transform:scale(.98);}
+    .btn-e:disabled{background:#94a3b8;cursor:not-allowed;}
+    .spin{width:17px;height:17px;border:2.5px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:none;}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .ft{border-top:1px solid var(--border);padding:14px 32px;background:#f8fafc;text-align:center;}
+    .ft p{font-size:.72rem;color:var(--text-3);line-height:1.6;}
+    .seg-badge{display:inline-flex;align-items:center;gap:5px;font-size:.68rem;color:#64748b;margin-top:8px;}
+    .seg-dot{width:5px;height:5px;border-radius:50%;background:#22c55e;animation:blink 2s infinite;}
+    @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="hd">
+    <div class="logo"><div class="logo-inner"></div></div>
+    <div>
+      <div class="hd-title">SAMU 192 — TI</div>
+      <div class="hd-sub">Sistema de Chamados · Acesso restrito</div>
+    </div>
+  </div>
+  <div class="bd">
+    <div class="err" id="err-box"><div class="err-dot"></div><span id="err-txt">Usuário ou senha incorretos.</span></div>
+    <div class="field">
+      <label class="lbl" for="f-u">Usuário</label>
+      <div class="fw">
+        <span class="fi-ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg></span>
+        <input type="text" id="f-u" placeholder="Nome de usuário" autocomplete="username" autocapitalize="none" spellcheck="false" onkeydown="if(event.key==='Enter')document.getElementById('f-p').focus()">
+      </div>
+    </div>
+    <div class="field" style="margin-bottom:24px;">
+      <label class="lbl" for="f-p">Senha</label>
+      <div class="fw">
+        <span class="fi-ico"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+        <input type="password" id="f-p" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')entrar()">
+        <button class="eye" type="button" onclick="tgPass()" title="Mostrar/ocultar">
+          <svg id="ico-e" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          <svg id="ico-o" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+        </button>
+      </div>
+    </div>
+    <button class="btn-e" id="btn-e" onclick="entrar()">
+      <div class="spin" id="sp"></div>
+      <span id="btn-t">Entrar no painel</span>
+    </button>
+  </div>
+  <div class="ft">
+    <p>Acesso exclusivo a técnicos autorizados.<br>Em caso de dúvidas contate o administrador.</p>
+    <div class="seg-badge"><div class="seg-dot"></div>Conexão segura · Google Apps Script</div>
+  </div>
+</div>
+
+<script>
+// ─── FIX: APP_URL injetada diretamente pelo backend via scriptlet GAS ──────
+// Isso elimina a corrida entre o google.script.run assíncrono e o clique do usuário.
+var APP_URL = '<?= _APP_URL ?>';
+if (!APP_URL) APP_URL = window.location.href.replace(/[?#].*$/, '');
+
+var _erros = 0, _bloqAte = 0, _submetendo = false;
+
+function tgPass() {
+  var i = document.getElementById('f-p'), on = i.type === 'password';
+  i.type = on ? 'text' : 'password';
+  document.getElementById('ico-e').style.display = on ? 'none' : '';
+  document.getElementById('ico-o').style.display = on ? '' : 'none';
+}
+
+function showErr(msg) {
+  document.getElementById('err-txt').textContent = msg || 'Usuário ou senha incorretos.';
+  document.getElementById('err-box').classList.add('show');
+  ['f-u', 'f-p'].forEach(function(id) {
+    var el = document.getElementById(id);
+    el.classList.add('err-f', 'shake');
+    el.addEventListener('animationend', function() { el.classList.remove('shake'); }, { once: true });
+    el.addEventListener('input', function() {
+      el.classList.remove('err-f');
+      document.getElementById('err-box').classList.remove('show');
+    }, { once: true });
+  });
+}
+
+function setBloq(seg) {
+  var btn = document.getElementById('btn-e'), txt = document.getElementById('btn-t');
+  _bloqAte = Date.now() + seg * 1000;
+  btn.disabled = true;
+  var iv = setInterval(function() {
+    var r = Math.ceil((_bloqAte - Date.now()) / 1000);
+    if (r <= 0) { clearInterval(iv); btn.disabled = false; txt.textContent = 'Entrar no painel'; return; }
+    txt.textContent = 'Aguarde ' + r + 's…';
+  }, 500);
+}
+
+// ─── FIX 2: Navegação robusta via link DOM com target="_top" ────────────────
+// No Google Apps Script o app roda dentro de um iframe.
+// Só target="_top" garante que a navegação quebre o iframe e carregue no topo.
+function navegarPara(urlDestino) {
+  // Tenta primeiro via google.script.history (mantém SPA limpo)
+  try {
+    // Cria elemento <a> e adiciona ao DOM antes de clicar (necessário em alguns browsers)
+    var a = document.createElement('a');
+    a.href   = urlDestino;
+    a.target = '_top';
+    a.rel    = 'noopener';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    // Remove o elemento após click para não poluir o DOM
+    setTimeout(function() { try { document.body.removeChild(a); } catch(e){} }, 1000);
+  } catch(e) {
+    // Fallback: força navegação direta no contexto pai
+    try { window.top.location.href = urlDestino; } catch(e2) {
+      window.location.href = urlDestino;
+    }
+  }
+}
+
+function entrar() {
+  if (Date.now() < _bloqAte) return;
+  if (_submetendo) return;
+
+  var u = document.getElementById('f-u').value.trim();
+  var p = document.getElementById('f-p').value;
+  document.getElementById('err-box').classList.remove('show');
+
+  if (!u) { document.getElementById('f-u').focus(); showErr('Informe o usuário.'); return; }
+  if (!p) { document.getElementById('f-p').focus(); showErr('Informe a senha.'); return; }
+
+  var btn = document.getElementById('btn-e'),
+      sp  = document.getElementById('sp'),
+      txt = document.getElementById('btn-t');
+
+  _submetendo = true;
+  btn.disabled = true;
+  sp.style.display = 'block';
+  txt.textContent = 'Verificando…';
+
+  google.script.run
+    .withSuccessHandler(function(r) {
+      if (r && r.ok) {
+        // ─── FIX 3: Salva credenciais na sessão ANTES de navegar ────────────
+        try {
+          sessionStorage.setItem('samu_token',   r.token);
+          sessionStorage.setItem('samu_usuario', r.nome);
+          sessionStorage.setItem('samu_admin',   r.admin ? '1' : '0');
+        } catch(e) {}
+
+        txt.textContent = 'Bem-vindo, ' + r.nome.charAt(0) + r.nome.slice(1).toLowerCase() + '!';
+
+        // ─── FIX 4: Monta URL com token e navega para o painel ──────────────
+        // APP_URL já foi obtida do backend; se ainda estiver vazia usa fallback
+        var base = APP_URL || window.location.href.replace(/[?#].*$/, '');
+        var urlFinal = base + '?p=painel&t=' + encodeURIComponent(r.token);
+        navegarPara(urlFinal);
+
+      } else {
+        sp.style.display = 'none';
+        _submetendo = false;
+        btn.disabled = false;
+        txt.textContent = 'Entrar no painel';
+        _erros++;
+        showErr(r && r.erro ? r.erro : 'Usuário ou senha incorretos.');
+        if (_erros >= 3) {
+          var seg = Math.min(15 * (_erros - 2), 120);
+          showErr('Muitas tentativas. Aguarde ' + seg + 's.');
+          setBloq(seg);
+        }
+        document.getElementById('f-p').value = '';
+        document.getElementById('f-p').focus();
+      }
+    })
+    .withFailureHandler(function(e) {
+      _submetendo = false;
+      sp.style.display = 'none';
+      btn.disabled = false;
+      txt.textContent = 'Entrar no painel';
+      showErr('Erro de conexão: ' + (e && e.message ? e.message : 'tente novamente.'));
+    })
+    .verificarLogin(u, p);
+}
+
+window.onload = function() {
+  // Limpa qualquer sessão anterior ao exibir a tela de login
+  try {
+    sessionStorage.removeItem('samu_token');
+    sessionStorage.removeItem('samu_usuario');
+    sessionStorage.removeItem('samu_admin');
+  } catch(e) {}
+  document.getElementById('f-u').focus();
+};
+</script>
+</body>
+</html>

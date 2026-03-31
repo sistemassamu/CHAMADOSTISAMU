@@ -1,0 +1,885 @@
+// ════════════════════════════════════════════════════════════════
+//  CONFIGURAÇÕES
+// ════════════════════════════════════════════════════════════════
+const ID_PLANILHA             = "1VRkZwVPi-bPOM27pi6oZGRqAfduwNGuSlwM1g0qn8WM";
+const ID_ABA_CHAMADOS         = 657430873;
+const ID_PASTA_ANEXOS_USUARIO = '1Y7gekUYvsCOQOjqgvSRsXcbPIKX_tAdm'; 
+const ID_PASTA_RESOLUCOES     = '1yEFurAKOZmtq0Bp9h4DCFW6frh8xgm5M'; 
+
+// ════════════════════════════════════════════════════════════════
+//  AUTENTICAÇÃO — LOGIN POR USUÁRIO/SENHA COM ADMIN
+// ════════════════════════════════════════════════════════════════
+var TOKEN_VALIDADE_HORAS = 10;
+var P_SENHA  = 'SAMU_SENHA_';
+var P_ADMIN  = 'SAMU_ADMIN_';
+var P_TOKEN  = 'SAMU_TOK_';
+var P_USERS  = 'SAMU_USERS_LIST';
+var HASH_SALT = 'SAMU192_TI_SALT_v1';
+
+// Adicione esta função temporariamente no Codigo.gs.txt para testar
+function testarChat() {
+  try {
+    var sheet = _getSheetChat();
+    var data = sheet.getDataRange().getValues();
+    Logger.log('Conteúdo da planilha CHAT:');
+    for (var i = 0; i < data.length && i < 10; i++) {
+      Logger.log('Linha ' + i + ': ' + JSON.stringify(data[i]));
+    }
+    return data;
+  } catch(e) {
+    Logger.log('Erro: ' + e.message);
+    return 'Erro: ' + e.message;
+  }
+}
+
+function _getSheetChat() {
+  var ss = SpreadsheetApp.openById(ID_PLANILHA);
+  var aba = ss.getSheetByName('CHAT');
+  if (!aba) { 
+    Logger.log('Criando aba CHAT');
+    aba = ss.insertSheet('CHAT'); 
+    aba.appendRow(['ID_Chamado', 'De', 'Nome', 'Mensagem', 'Hora', 'Lida']); 
+    aba.getRange(1, 1, 1, 6).setFontWeight('bold'); 
+  }
+  Logger.log('Aba CHAT encontrada/corrigida');
+  return aba;
+}
+
+function debugChatMessages() {
+  try {
+    var sheet = _getSheetChat();
+    var data = sheet.getDataRange().getValues();
+    
+    Logger.log('=== DEBUG CHAT MESSAGES ===');
+    Logger.log('Total de linhas: ' + data.length);
+    
+    for (var i = 0; i < Math.min(10, data.length); i++) { // Mostrar até 10 primeiras linhas
+      Logger.log('Linha ' + i + ': ' + JSON.stringify(data[i]));
+    }
+    
+    return { success: true, rows: data.length, sample: data.slice(0, Math.min(5, data.length)) };
+  } catch(e) {
+    Logger.log('Erro debug: ' + e.message);
+    return { success: false, error: e.message };
+  }
+}
+
+// ── Hash de senha (SHA-256 + salt) ───────────────────────────────
+// FIX: função duplicada removida — mantida apenas esta versão com proteção de null/undefined
+function _hashSenha(senha) {
+  if (senha === undefined || senha === null) return '';
+  try {
+    var bytes = Utilities.computeDigest(
+      Utilities.DigestAlgorithm.SHA_256,
+      senha.toString() + HASH_SALT
+    );
+    return bytes.map(function(b) {
+      return (b < 0 ? b + 256 : b).toString(16).padStart(2, '0');
+    }).join('');
+  } catch(e) {
+    return senha.toString();
+  }
+}
+
+function _eSenhaHasheada(s) {
+  if (!s) return false;
+  return /^[0-9a-f]{64}$/.test(s.toString());
+}
+
+// ── Limpeza de tokens (Garbage Collector automático) ──────────────
+function limparTokensExpirados() {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var todas = props.getProperties();
+    var agora = Date.now();
+    var chavesParaDeletar = [];
+    
+    Object.keys(todas).forEach(function(k) {
+      if (k.indexOf(P_TOKEN) !== 0) return;
+      var partes = todas[k].split('|');
+      var expira = parseInt(partes[1], 10);
+      if (isNaN(expira) || agora > expira) {
+        chavesParaDeletar.push(k);
+      }
+    });
+    
+    chavesParaDeletar.forEach(function(k) {
+      props.deleteProperty(k);
+    });
+  } catch(e) {
+    Logger.log('Erro ao limpar tokens: ' + e.message);
+  }
+}
+
+// Garante que existe pelo menos o admin padrão
+function _garantirAdminPadrao() {
+  var props = PropertiesService.getScriptProperties();
+  var lista = _listaUsuarios(props);
+  if (lista.length === 0) {
+    props.setProperty(P_SENHA  + 'ADMIN', _hashSenha('admin@samu192'));
+    props.setProperty(P_ADMIN  + 'ADMIN', 'true');
+    props.setProperty(P_USERS, JSON.stringify(['ADMIN']));
+  }
+}
+
+function _listaUsuarios(props) {
+  try {
+    var raw = (props || PropertiesService.getScriptProperties()).getProperty(P_USERS);
+    return raw ? JSON.parse(raw) : [];
+  } catch(e) { return []; }
+}
+
+function _salvarLista(props, lista) {
+  props.setProperty(P_USERS, JSON.stringify(lista));
+}
+
+// ── Login ─────────────────────────────────────────────────────────
+function verificarLogin(usuario, senha) {
+  try {
+    if (!usuario || !senha) return { ok: false, erro: 'Preencha usuário e senha.' };
+    
+    limparTokensExpirados();
+    
+    var u = usuario.toString().toUpperCase().trim();
+    var s = senha.toString();
+
+    var props = PropertiesService.getScriptProperties();
+    _garantirAdminPadrao();
+
+    var senhaArmazenada = props.getProperty(P_SENHA + u);
+    if (!senhaArmazenada) return { ok: false, erro: 'Usuário não encontrado.' };
+
+    var senhaOk = false;
+    if (_eSenhaHasheada(senhaArmazenada)) {
+      senhaOk = (senhaArmazenada === _hashSenha(s));
+    } else {
+      if (senhaArmazenada === s) {
+        props.setProperty(P_SENHA + u, _hashSenha(s));
+        senhaOk = true;
+      }
+    }
+    if (!senhaOk) return { ok: false, erro: 'Senha incorreta.' };
+
+    var token  = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+    var ts     = new Date().getTime();
+    var expira = ts + TOKEN_VALIDADE_HORAS * 3600000;
+    var isAdm  = props.getProperty(P_ADMIN + u) === 'true';
+
+    props.setProperty(P_TOKEN + token, u + '|' + expira + '|' + (isAdm ? '1' : '0'));
+
+    return { ok: true, token: token, nome: u, admin: isAdm };
+  } catch(e) {
+    return { ok: false, erro: 'Erro interno: ' + e.message };
+  }
+}
+
+// ── Verificar token ───────────────────────────────────────────────
+function verificarTokenAcesso(token) {
+  try {
+    if (!token) return { ok: false };
+    var props = PropertiesService.getScriptProperties();
+    var val   = props.getProperty(P_TOKEN + token);
+    if (!val) return { ok: false };
+    
+    var p = val.split('|');
+    var expira = parseInt(p[1], 10);
+    
+    if (isNaN(expira) || Date.now() > expira) {
+      props.deleteProperty(P_TOKEN + token);
+      return { ok: false, expirado: true };
+    }
+    return { ok: true, usuario: p[0], admin: p[2] === '1' };
+  } catch(e) {
+    return { ok: false };
+  }
+}
+
+function _validarAcessoBackend(token) {
+  var r = verificarTokenAcesso(token);
+  if (!r.ok) {
+    throw new Error('Acesso negado. Sessão inválida, inexistente ou expirada. Recarregue a página e faça login novamente.');
+  }
+  return r;
+}
+
+// ── Encerrar sessão ───────────────────────────────────────────────
+function encerrarSessao(token) {
+  try {
+    if (token) PropertiesService.getScriptProperties().deleteProperty(P_TOKEN + token);
+    return true;
+  } catch(e) { return false; }
+}
+
+function obterUrlBase() {
+  try { return ScriptApp.getService().getUrl(); } catch(e) { return ''; }
+}
+
+// ════════════════════════════════════════════════════════════════
+//  GERENCIAMENTO DE USUÁRIOS — apenas admin
+// ════════════════════════════════════════════════════════════════
+function _verificarAdmin(token) {
+  var r = _validarAcessoBackend(token);
+  if (!r.admin) throw new Error('Acesso negado. Requer administrador.');
+  return r;
+}
+
+function listarTecnicos(token) {
+  try {
+    var r = _validarAcessoBackend(token);
+    var props = PropertiesService.getScriptProperties();
+    var lista = _listaUsuarios(props);
+    return lista.map(function(u) {
+      return { usuario: u, admin: props.getProperty(P_ADMIN + u) === 'true' };
+    });
+  } catch(e) { return []; }
+}
+
+function adminListarUsuarios(token) {
+  try {
+    _verificarAdmin(token);
+    var props = PropertiesService.getScriptProperties();
+    var lista = _listaUsuarios(props);
+    return lista.map(function(u) {
+      return { usuario: u, admin: props.getProperty(P_ADMIN + u) === 'true' };
+    });
+  } catch(e) { return { erro: e.message }; }
+}
+
+function adminSalvarUsuario(token, obj) {
+  try {
+    _verificarAdmin(token);
+    if (!obj || !obj.usuario || !obj.senha) return { ok: false, erro: 'Usuário e senha obrigatórios.' };
+    var u = obj.usuario.toString().toUpperCase().replace(/[^A-Z0-9]/g, '').trim();
+    if (!u) return { ok: false, erro: 'Nome de usuário inválido.' };
+    
+    var props = PropertiesService.getScriptProperties();
+    var lista = _listaUsuarios(props);
+
+    props.setProperty(P_SENHA + u, _hashSenha(obj.senha.toString()));
+    props.setProperty(P_ADMIN + u, obj.admin ? 'true' : 'false');
+    if (lista.indexOf(u) === -1) { lista.push(u); _salvarLista(props, lista); }
+
+    return { ok: true };
+  } catch(e) { return { ok: false, erro: e.message }; }
+}
+
+function adminAlterarSenha(token, usuario, novaSenha) {
+  try {
+    _verificarAdmin(token);
+    if (!usuario || !novaSenha) return { ok: false, erro: 'Informe usuário e nova senha.' };
+    var u = usuario.toString().toUpperCase().trim();
+    var props = PropertiesService.getScriptProperties();
+    var lista = _listaUsuarios(props);
+    if (lista.indexOf(u) === -1) return { ok: false, erro: 'Usuário não encontrado.' };
+    props.setProperty(P_SENHA + u, _hashSenha(novaSenha.toString()));
+    return { ok: true };
+  } catch(e) { return { ok: false, erro: e.message }; }
+}
+
+function adminRemoverUsuario(token, usuario) {
+  try {
+    var sess = _verificarAdmin(token);
+    var u    = usuario.toString().toUpperCase().trim();
+    if (u === sess.usuario) return { ok: false, erro: 'Não é possível remover seu próprio usuário.' };
+    var props = PropertiesService.getScriptProperties();
+    var lista = _listaUsuarios(props).filter(function(x) { return x !== u; });
+    props.deleteProperty(P_SENHA + u);
+    props.deleteProperty(P_ADMIN + u);
+    _salvarLista(props, lista);
+    return { ok: true };
+  } catch(e) { return { ok: false, erro: e.message }; }
+}
+
+// ════════════════════════════════════════════════════════════════
+//  ROTEAMENTO BLINDADO
+// ════════════════════════════════════════════════════════════════
+function doGet(e) {
+  var p = (e && e.parameter && e.parameter.p) ? e.parameter.p : 'usuario';
+  var t = (e && e.parameter && e.parameter.t) ? e.parameter.t : '';
+
+  var ALLOWED_PAGES = ['usuario', 'painel', 'relatorio', 'login'];
+  if (ALLOWED_PAGES.indexOf(p) === -1) {
+    p = 'usuario'; 
+  }
+
+  if (p === 'usuario') {
+    return _renderTemplate('usuario', 'Sistema TI SAMU 192', '');
+  }
+
+  // ─── FIX: separação clara entre rota de login e rotas restritas ──────────
+  // Antes, 'login' estava misturado no bloco RESTRITAS via ||, causando
+  // avaliação ambígua. Agora cada rota é tratada de forma explícita.
+  if (p === 'login') {
+    _garantirAdminPadrao();
+    return _renderTemplate('login', 'SAMU 192 — TI · Acesso', '');
+  }
+
+  var RESTRITAS = ['painel', 'relatorio'];
+  if (RESTRITAS.indexOf(p) !== -1) {
+    var tokenOk = t ? verificarTokenAcesso(t).ok : false;
+    if (!tokenOk) {
+      _garantirAdminPadrao();
+      return _renderTemplate('login', 'SAMU 192 — TI · Acesso', '');
+    }
+  }
+
+  // FIX: passa o token validado para que o backend o injete diretamente no HTML
+  var titulos = { painel: 'Painel TI — SAMU 192', relatorio: 'Relatório TI — SAMU 192' };
+  return _renderTemplate(p, titulos[p] || 'Sistema TI SAMU 192', t);
+}
+
+// ════════════════════════════════════════════════════════════════
+//  RENDERIZAÇÃO COM INJEÇÃO DE TOKEN E URL BASE
+// ════════════════════════════════════════════════════════════════
+// FIX CRÍTICO: window.location.search dentro do iframe do GAS NÃO contém
+// os parâmetros da URL pública. O token e a URL base devem ser injetados
+// diretamente no HTML pelo backend antes de servir a página.
+function _renderTemplate(fileName, title, token) {
+  try {
+    var baseUrl = '';
+    try { baseUrl = ScriptApp.getService().getUrl(); } catch(e) {}
+
+    var template = HtmlService.createTemplateFromFile(fileName);
+    // Expõe variáveis para scriptlets <?= _TOKEN_INJETADO ?> e <?= _APP_URL ?> no HTML
+    template._TOKEN_INJETADO = token || '';
+    template._APP_URL        = baseUrl;
+
+    return template.evaluate()
+      .setTitle(title)
+      .addMetaTag('viewport', 'width=device-width,initial-scale=1')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  } catch (err) {
+    return HtmlService.createHtmlOutput(
+      "<div style='font-family:sans-serif;padding:40px;text-align:center;'>" +
+      "<h2 style='color:#d32f2f;'>Erro Critico do Sistema</h2>" +
+      "<p>Nao foi possivel carregar: <b>" + fileName + "</b></p>" +
+      "<p style='color:#555;background:#f4f4f4;padding:15px;border-radius:8px;display:inline-block;'>" + err.message + "</p>" +
+      "</div>"
+    );
+  }
+}
+
+
+// ════════════════════════════════════════════════════════════════
+//  UTILITÁRIOS E PROTEÇÕES
+// ════════════════════════════════════════════════════════════════
+function _sanitize(str) {
+  if (!str) return '';
+  var val = str.toString().trim();
+  val = val.replace(/&/g, "&amp;")
+           .replace(/</g, "&lt;")
+           .replace(/>/g, "&gt;")
+           .replace(/"/g, "&quot;")
+           .replace(/'/g, "&#039;");
+  if (/^[=+\-@]/.test(val)) { val = "'" + val; }
+  return val;
+}
+
+function getSheet() {
+  var ss = SpreadsheetApp.openById(ID_PLANILHA);
+  var sheet = ss.getSheets().find(function(s) { return s.getSheetId() == ID_ABA_CHAMADOS; });
+  if (!sheet) throw new Error("Aba principal de chamados não encontrada.");
+  return sheet;
+}
+
+function getDiaSemana(d) {
+  return ["Domingo","Segunda-feira","Terça-feira","Quarta-feira","Quinta-feira","Sexta-feira","Sábado"][d.getDay()];
+}
+
+function getMes(d) {
+  return ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"][d.getMonth()];
+}
+
+function gerarIdUnicoSeguro(prefixo) {
+  var uuid = Utilities.getUuid().replace(/-/g, '').substring(0, 8).toUpperCase();
+  return prefixo + uuid;
+}
+
+function salvarArquivoNoDrive(base64Data, nomeArquivo, idPasta) {
+  try {
+    if (!base64Data || base64Data.indexOf(',') === -1) return "";
+    var pastaRaiz = DriveApp.getFolderById(idPasta);
+    var agora = new Date();
+    var nomePasta = (agora.getMonth() + 1) + "-" + agora.getFullYear();
+    var pastas = pastaRaiz.getFoldersByName(nomePasta);
+    var pastaDestino = pastas.hasNext() ? pastas.next() : pastaRaiz.createFolder(nomePasta);
+    var partes = base64Data.split(',');
+    var mimeType = partes[0].match(/:(.*?);/)[1];
+    var blob = Utilities.newBlob(Utilities.base64Decode(partes[1]), mimeType, nomeArquivo);
+    var arquivo = pastaDestino.createFile(blob);
+    arquivo.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return arquivo.getUrl();
+  } catch (e) { return ""; }
+}
+
+function buscarSetores() {
+  try {
+    var ss = SpreadsheetApp.openById(ID_PLANILHA);
+    var abaConf = ss.getSheetByName("CONFIGURAÇÕES");
+    if (!abaConf) return [];
+    var ultima = abaConf.getLastRow();
+    if (ultima < 2) return [];
+    return abaConf.getRange(2, 1, ultima - 1, 1).getValues().flat().filter(function(x) { return x && x.toString().trim() !== ""; });
+  } catch (e) { return []; }
+}
+
+// ════════════════════════════════════════════════════════════════
+//  EMAIL E CHAMADOS GERAIS
+// ════════════════════════════════════════════════════════════════
+function enviarEmailAbertura(email, nome, id, setor, descricao) {
+  if (!email || email.indexOf('@') === -1) return;
+  try {
+    MailApp.sendEmail({
+      to: email, subject: '[SAMU TI] Chamado ' + id + ' recebido',
+      htmlBody: '<div style="font-family:sans-serif;max-width:520px;margin:0 auto;"><div style="background:#c62828;padding:18px 24px;border-radius:8px 8px 0 0;"><h2 style="color:white;margin:0;font-size:16px;">Chamado de suporte recebido</h2></div><div style="background:#fff;border:1px solid #e2e8f0;border-top:none;padding:24px;border-radius:0 0 8px 8px;"><p style="margin:0 0 16px;">Olá, <strong>' + nome + '</strong>!</p><p style="margin:0 0 16px;">Seu chamado foi registrado com sucesso. Nossa equipe de TI entrará em contato em breve.</p><table style="width:100%;border-collapse:collapse;font-size:14px;"><tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;width:40%;">Protocolo</td><td style="padding:8px 12px;background:#f8fafc;color:#c62828;font-weight:700;">' + id + '</td></tr><tr><td style="padding:8px 12px;font-weight:600;">Setor</td><td style="padding:8px 12px;">' + setor + '</td></tr><tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;">Descrição</td><td style="padding:8px 12px;background:#f8fafc;">' + descricao + '</td></tr></table><p style="margin:20px 0 0;font-size:12px;color:#94a3b8;">Guarde o número do protocolo. — TI SAMU 192</p></div></div>'
+    });
+  } catch (e) {}
+}
+
+function enviarEmailResolucao(email, nome, id, setor, dataResolucao) {
+  if (!email || email.indexOf('@') === -1) return;
+  try {
+    MailApp.sendEmail({
+      to: email, subject: '[SAMU TI] Chamado ' + id + ' resolvido',
+      htmlBody: '<div style="font-family:sans-serif;max-width:520px;margin:0 auto;"><div style="background:#15803d;padding:18px 24px;border-radius:8px 8px 0 0;"><h2 style="color:white;margin:0;font-size:16px;">✓ Chamado resolvido</h2></div><div style="background:#fff;border:1px solid #e2e8f0;border-top:none;padding:24px;border-radius:0 0 8px 8px;"><p style="margin:0 0 16px;">Olá, <strong>' + nome + '</strong>!</p><p style="margin:0 0 16px;">Seu chamado foi resolvido pela equipe de TI.</p><table style="width:100%;border-collapse:collapse;font-size:14px;"><tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;width:40%;">Protocolo</td><td style="padding:8px 12px;background:#f8fafc;color:#15803d;font-weight:700;">' + id + '</td></tr><tr><td style="padding:8px 12px;font-weight:600;">Setor</td><td style="padding:8px 12px;">' + setor + '</td></tr><tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;">Status</td><td style="padding:8px 12px;background:#f8fafc;">CONCLUÍDO</td></tr><tr><td style="padding:8px 12px;font-weight:600;">Data</td><td style="padding:8px 12px;">' + dataResolucao + '</td></tr></table><p style="margin:20px 0 0;font-size:12px;color:#94a3b8;">Se o problema persistir, abra um novo chamado. — TI SAMU 192</p></div></div>'
+    });
+  } catch (e) {}
+}
+
+function salvarChamado(obj) {
+  if (!obj) return null;
+  var email = (obj.email || '').toString().trim().toLowerCase();
+
+  // ── Verificação de spam ANTES de qualquer processamento ──────────────────
+  var cache = CacheService.getScriptCache();
+  if (cache.get('spam_' + email)) {
+    throw new Error("Muitas requisições. Aguarde um minuto antes de abrir outro chamado.");
+  }
+
+  // ── Validação de campos ANTES de adquirir o lock ─────────────────────────
+  // (Evita segurar o lock enquanto valida dados que poderiam ser rejeitados)
+  var nome      = _sanitize(obj.nome);
+  var setor     = _sanitize(obj.setor);
+  var descricao = _sanitize(obj.descricao);
+  if (!nome || !email || !setor || descricao.length < 10) return null;
+
+  var id = null;
+  var lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    var sheet = getSheet();
+    var dataAbertura = new Date();
+    id = gerarIdUnicoSeguro("CH-");
+
+    var arquivos = obj.arquivos || [];
+    if (arquivos.length === 0 && obj.fotoData) { arquivos = [{ data: obj.fotoData, nome: obj.fotoNome || "foto.jpg", tipo: "image/jpeg" }]; }
+    var links = [];
+    arquivos.forEach(function(arq, i) {
+      if (arq.data) links.push(salvarArquivoNoDrive(arq.data, id + "_" + (i+1) + "_" + (arq.nome||"arquivo"), ID_PASTA_ANEXOS_USUARIO));
+    });
+
+    sheet.appendRow([
+      dataAbertura, "", getDiaSemana(dataAbertura), "", "", setor, "", "", "", descricao, "ABERTO", "", getMes(dataAbertura), dataAbertura.getFullYear(), id, email, nome, descricao, links.join(" | "), "", "USUARIO"
+    ]);
+
+    // ── FIX 7: cache.put SOMENTE após appendRow bem-sucedido ─────────────────
+    // Antes estava antes do lock — se a função falhasse entre cache.put e
+    // appendRow, o usuário ficava bloqueado por 60s sem o chamado ter sido salvo.
+    cache.put('spam_' + email, 'bloqueado', 60);
+
+  } finally {
+    lock.releaseLock();
+  }
+
+  // ── FIX extra: envio de e-mail FORA do lock ──────────────────────────────
+  // Manter enviarEmail dentro do lock segurava a planilha durante o envio
+  // (podendo causar timeout de 15s para outros usuários simultâneos).
+  if (id) {
+    enviarEmailAbertura(email, nome, id, setor, descricao);
+  }
+
+  return id;
+}
+
+function salvarChamadoTI(obj, token) {
+  _validarAcessoBackend(token);
+  var lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    var sheet = getSheet();
+    var dataAbertura = new Date();
+    var id = gerarIdUnicoSeguro("TI-");
+    
+    var statusFinal = obj.status === "CONCLUÍDO" ? "CONCLUÍDO" : "ABERTO";
+    var localAtividade = obj.local === "BASE" ? "BASE DESCENTRALIZADA" : "CENTRAL";
+    var baseDescentralizada = obj.local === "BASE" ? _sanitize(obj.baseNome) : "";
+    var setorFinal = obj.local === "CENTRAL" ? _sanitize(obj.setor) : baseDescentralizada;
+    var descricao = _sanitize(obj.descricao);
+    
+    var linkFoto = obj.fotoData ? salvarArquivoNoDrive(obj.fotoData, id+"_"+(obj.fotoNome||"foto.jpg"), ID_PASTA_RESOLUCOES) : "";
+    var parecerFinal = statusFinal === "CONCLUÍDO" ? descricao + (linkFoto ? " | FOTO: " + linkFoto : "") : "";
+
+    sheet.appendRow([
+      dataAbertura, statusFinal==="CONCLUÍDO"?dataAbertura:"", getDiaSemana(dataAbertura), _sanitize(obj.turno),
+      localAtividade, setorFinal, baseDescentralizada, _sanitize(obj.natureza), _sanitize(obj.prioridade),
+      descricao, statusFinal, _sanitize(obj.tecnico), getMes(dataAbertura), dataAbertura.getFullYear(), id,
+      "", "EQUIPE TI", descricao, "", parecerFinal, "TI"
+    ]);
+    return id;
+  } finally { lock.releaseLock(); }
+}
+
+function finalizarChamado(obj, token) {
+  _validarAcessoBackend(token);
+  var lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    var sheet = getSheet(), dados = sheet.getDataRange().getValues(), indice = {};
+    dados.slice(1).forEach(function(l, i) { if (l[14]) indice[String(l[14])] = i + 2; });
+    var linha = indice[String(obj.id)];
+    if (!linha) throw new Error("Chamado não encontrado.");
+
+    var linhaDados = dados[linha - 2];
+    var dataAtividade = new Date();
+    var linkFoto = obj.fotoResolucaoData ? salvarArquivoNoDrive(obj.fotoResolucaoData, obj.id + "_resolucao_" + (obj.fotoResolucaoNome || "foto.jpg"), ID_PASTA_RESOLUCOES) : "";
+    var parecerFinal = _sanitize(obj.parecer) + (linkFoto ? " | FOTO: " + linkFoto : "");
+
+    sheet.getRange(linha, 2).setValue(dataAtividade);
+    sheet.getRange(linha, 4).setValue(_sanitize(obj.turno));
+    sheet.getRange(linha, 5).setValue(obj.local === "BASE" ? "BASE DESCENTRALIZADA" : "CENTRAL");
+    sheet.getRange(linha, 7).setValue(obj.local === "BASE" ? _sanitize(obj.baseNome) : "");
+    sheet.getRange(linha, 8).setValue(_sanitize(obj.natureza));
+    sheet.getRange(linha, 9).setValue(_sanitize(obj.prioridadeTecnico));
+    sheet.getRange(linha, 11).setValue("CONCLUÍDO");
+    sheet.getRange(linha, 12).setValue(_sanitize(obj.tecnico));
+    sheet.getRange(linha, 20).setValue(parecerFinal);
+
+    enviarEmailResolucao(linhaDados[15]||"", linhaDados[16]||"", obj.id, linhaDados[5]||"", Utilities.formatDate(dataAtividade, "GMT-3", "dd/MM/yyyy HH:mm"));
+    return true;
+  } finally { lock.releaseLock(); }
+}
+
+function salvarAndamento(obj, token) {
+  _validarAcessoBackend(token);
+  var lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    var sheet = getSheet(), dados = sheet.getDataRange().getValues(), indice = {};
+    dados.slice(1).forEach(function(l, i) { if (l[14]) indice[String(l[14])] = i + 2; });
+    var linha = indice[String(obj.id)];
+    if (!linha) return false;
+
+    if (obj.tecnico)    sheet.getRange(linha, 12).setValue(_sanitize(obj.tecnico));
+    if (obj.turno)      sheet.getRange(linha, 4).setValue(_sanitize(obj.turno));
+    if (obj.natureza)   sheet.getRange(linha, 8).setValue(_sanitize(obj.natureza));
+    if (obj.prioridade) sheet.getRange(linha, 9).setValue(_sanitize(obj.prioridade));
+    if (obj.local)      sheet.getRange(linha, 5).setValue(obj.local === 'BASE' ? 'BASE DESCENTRALIZADA' : 'CENTRAL');
+    
+    sheet.getRange(linha, 7).setValue(obj.local === 'BASE' ? _sanitize(obj.baseNome) : '');
+    if (obj.parecer)    sheet.getRange(linha, 20).setValue('[ANDAMENTO] ' + _sanitize(obj.parecer));
+    
+    sheet.getRange(linha, 11).setValue('EM ANDAMENTO');
+    return true;
+  } finally { lock.releaseLock(); }
+}
+
+function listarChamadosAbertos(token) {
+  _validarAcessoBackend(token);
+  var valores = getSheet().getDataRange().getValues();
+  if (valores.length <= 1) return [];
+  var naoLidas = _contarMsgNaoLidas();
+
+  return valores.slice(1).filter(function(l) { return l[10] === "ABERTO" || l[10] === "EM ANDAMENTO"; }).map(function(l) {
+    var arquivos = [];
+    if (l[18]) l[18].toString().split(" | ").forEach(function(parte) {
+      if (!parte.trim()) return;
+      var p = parte.split(":::"), url = p[0].trim();
+      if (!url || url.indexOf('http') !== 0) return;
+      var nome = p[1] || url.split('/').pop() || "";
+      var tipo = p[2] || "";
+      if (!tipo) { var ext = nome.split('.').pop().toLowerCase(); tipo = ['jpg','jpeg','png','gif','webp'].indexOf(ext) !== -1 ? 'image/'+(ext==='jpg'?'jpeg':ext) : 'application/octet-stream'; }
+      arquivos.push({ url: url, nome: nome, tipo: tipo });
+    });
+    var emAndamento = l[10] === "EM ANDAMENTO";
+    return {
+      timestamp: new Date(l[0]).getTime(), data: Utilities.formatDate(new Date(l[0]), "GMT-3", "dd/MM/yy HH:mm"),
+      setor: l[5]||"", prioridade: l[8]||"", descricao: l[9]||"", id: l[14]||"", email: l[15]||"", nome: l[16]||"",
+      arquivos: arquivos, origemTI: String(l[20]).toUpperCase() === "TI", emAndamento: emAndamento, tecnicoAnd: emAndamento ? (l[11]||"") : "",
+      andamento: emAndamento ? { tecnico: l[11]||"", turno: l[3]||"", natureza: l[7]||"", prioridade: l[8]||"", local: l[4]==="BASE DESCENTRALIZADA"?"BASE":(l[4]?"CENTRAL":""), baseNome: l[6]||"", parecer: String(l[19]||"").replace(/^\[ANDAMENTO\] /, "") } : null,
+      msgNaoLidas: naoLidas[String(l[14]).toUpperCase()] || 0
+    };
+  }).reverse();
+}
+
+function listarChamadosConcluidos(token) {
+  _validarAcessoBackend(token);
+  return getSheet().getDataRange().getValues().slice(1).filter(function(l) { return l[10] === 'CONCLUÍDO'; }).map(function(l) {
+    return { id: l[14]||'', nome: l[16]||'', setor: l[5]||'', prioridade: l[8]||'', descricao: l[9]||'', tecnico: l[11]||'', natureza: l[7]||'', origemTI: String(l[20]).toUpperCase() === 'TI', dataAbert: Utilities.formatDate(new Date(l[0]), 'GMT-3', 'dd/MM/yy HH:mm'), dataConc: l[1]?Utilities.formatDate(new Date(l[1]), 'GMT-3', 'dd/MM/yy HH:mm'):'' };
+  }).reverse().slice(0, 50);
+}
+
+function liberarChamado(id, token) {
+  _validarAcessoBackend(token);
+  var lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    var sheet = getSheet(), dados = sheet.getDataRange().getValues(), indice = {};
+    dados.slice(1).forEach(function(l, i) { if (l[14]) indice[String(l[14])] = i + 2; });
+    var linha = indice[String(id)];
+    if (!linha) return false;
+    sheet.getRange(linha, 11).setValue('ABERTO');
+    sheet.getRange(linha, 12).setValue('');
+    return true;
+  } finally { lock.releaseLock(); }
+}
+
+function reabrirChamado(id, token) {
+  _validarAcessoBackend(token);
+  var lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    var sheet = getSheet(), dados = sheet.getDataRange().getValues(), indice = {};
+    dados.slice(1).forEach(function(l, i) { if (l[14]) indice[String(l[14])] = i + 2; });
+    var linha = indice[String(id)];
+    if (!linha) return false;
+    sheet.getRange(linha, 2).setValue('');
+    sheet.getRange(linha, 11).setValue('ABERTO');
+    sheet.getRange(linha, 20).setValue('');
+    return true;
+  } finally { lock.releaseLock(); }
+}
+
+function consultarChamado(id) {
+  var dados = getSheet().getDataRange().getValues();
+  for (var i = 1; i < dados.length; i++) {
+    if (String(dados[i][14]).toUpperCase() === String(id).toUpperCase()) {
+      return { id: dados[i][14]||'', nome: dados[i][16]||'', setor: dados[i][5]||'', status: dados[i][10]||'', data: Utilities.formatDate(new Date(dados[i][0]), 'GMT-3', 'dd/MM/yyyy HH:mm'), dataConclusao: dados[i][1] ? Utilities.formatDate(new Date(dados[i][1]), 'GMT-3', 'dd/MM/yyyy HH:mm') : '', tecnico: dados[i][11]||'' };
+    }
+  }
+  return null;
+}
+
+function _getSheetChat() {
+  var ss = SpreadsheetApp.openById(ID_PLANILHA), aba = ss.getSheetByName('CHAT');
+  if (!aba) { aba = ss.insertSheet('CHAT'); aba.appendRow(['ID_Chamado', 'De', 'Nome', 'Mensagem', 'Hora', 'Lida']); aba.getRange(1, 1, 1, 6).setFontWeight('bold'); }
+  return aba;
+}
+
+function _contarMsgNaoLidas() {
+  try {
+    var dados = _getSheetChat().getDataRange().getValues(), cont = {};
+    for (var i = 1; i < dados.length; i++) {
+      if (dados[i][1] === 'USUARIO' && !(dados[i][5] === true || dados[i][5] === 'TRUE')) {
+        var cid = String(dados[i][0]).toUpperCase();
+        cont[cid] = (cont[cid] || 0) + 1;
+      }
+    }
+    return cont;
+  } catch(e) { return {}; }
+}
+
+function buscarMensagens(idChamado, marcarLida, token) {
+  try {
+    // Normalizar o ID do chamado
+    var idBusca = String(idChamado || '').trim().toUpperCase();
+    Logger.log('buscarMensagens - Procurando ID: ' + idBusca);
+    
+    // Verificar permissões (usuário sempre pode ler, TI também)
+    var isTI = false;
+    if (token && token !== '') {
+      try {
+        var result = verificarTokenAcesso(token);
+        isTI = result.ok === true;
+        Logger.log('Autenticação TI: ' + isTI);
+      } catch(e) {
+        Logger.log('Erro na verificação de token: ' + e.message);
+      }
+    }
+    
+    // Obter dados da planilha
+    var aba = _getSheetChat();
+    var dados = aba.getDataRange().getValues();
+    Logger.log('Total de linhas na planilha CHAT: ' + dados.length);
+    
+    if (dados.length <= 1) {
+      Logger.log('Planilha CHAT vazia ou apenas cabeçalho');
+      return { msgs: [] };
+    }
+    
+    var msgs = [];
+    var linhasParaMarcar = [];
+    
+    // Processar cada linha
+    for (var i = 1; i < dados.length; i++) {
+      var linha = dados[i];
+      if (!linha || linha.length < 6) continue;
+      
+      var idMsg = String(linha[0] || '').trim().toUpperCase();
+      
+      // Debug das primeiras linhas
+      if (i <= 3) {
+        Logger.log('Linha ' + i + ' - ID Planilha: "' + idMsg + '" vs ID Busca: "' + idBusca + '"');
+      }
+      
+      if (idMsg === idBusca) {
+        var msgObj = {
+          de: String(linha[1] || ''),
+          nome: String(linha[2] || ''),
+          msg: String(linha[3] || ''),
+          hora: String(linha[4] || ''),
+          lida: (linha[5] === true || String(linha[5]).toString().toUpperCase() === 'TRUE')
+        };
+        
+        msgs.push(msgObj);
+        Logger.log('Mensagem encontrada: ' + JSON.stringify(msgObj));
+        
+        // Marcar como lida se for mensagem do usuário e marcarLida = true
+        if (marcarLida && msgObj.de === 'USUARIO' && !msgObj.lida) {
+          linhasParaMarcar.push(i + 1); // +1 porque getRange é 1-based
+          Logger.log('Marcando linha ' + (i + 1) + ' para leitura');
+        }
+      }
+    }
+    
+    // Atualizar mensagens como lidas
+    if (linhasParaMarcar.length > 0) {
+      Logger.log('Atualizando ' + linhasParaMarcar.length + ' mensagens como lidas');
+      for (var j = 0; j < linhasParaMarcar.length; j++) {
+        try {
+          aba.getRange(linhasParaMarcar[j], 6).setValue(true);
+          Logger.log('Linha ' + linhasParaMarcar[j] + ' marcada como lida');
+        } catch(e) {
+          Logger.log('Erro ao marcar linha ' + linhasParaMarcar[j] + ': ' + e.message);
+        }
+      }
+    }
+    
+    Logger.log('Total de mensagens retornadas: ' + msgs.length);
+    return { msgs: msgs };
+  } catch(e) { 
+    Logger.log('Erro CRÍTICO em buscarMensagens: ' + e.message);
+    Logger.log('Stack: ' + e.stack);
+    return { msgs: [], erro: e.message }; 
+  }
+}
+
+// No Codigo.gs.txt, adicionar log na função enviarMensagemChat:
+function enviarMensagemChat(obj) {
+  Logger.log('enviarMensagemChat chamado - obj: ' + JSON.stringify(obj));
+  
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    if (!obj || !obj.id || !obj.msg || !obj.msg.trim()) {
+      Logger.log('Dados inválidos para envio');
+      return { ok: false, erro: 'Dados inválidos.' };
+    }
+    if (!obj.de || (obj.de !== 'TI' && obj.de !== 'USUARIO')) {
+      Logger.log('Remetente inválido: ' + obj.de);
+      return { ok: false, erro: 'Remetente inválido.' };
+    }
+    
+    if (obj.de === 'TI') _validarAcessoBackend(obj.token);
+
+    if (obj.de === 'USUARIO') {
+       var cache = CacheService.getScriptCache();
+       if (cache.get('chat_spam_' + obj.id)) {
+         Logger.log('Spam detectado para ' + obj.id);
+         return { ok: false, erro: 'Aguarde alguns segundos para enviar novamente.' };
+       }
+       cache.put('chat_spam_' + obj.id, '1', 5); 
+    }
+
+    var msg  = _sanitize(obj.msg).substring(0, 1000);
+    var nome = _sanitize(obj.nome || obj.de);
+    var hora = Utilities.formatDate(new Date(), 'GMT-3', 'dd/MM HH:mm');
+    
+    Logger.log('Salvando mensagem - ID: ' + obj.id + ', De: ' + obj.de + ', Nome: ' + nome + ', Msg: ' + msg);
+
+    _getSheetChat().appendRow([obj.id.toString().toUpperCase(), obj.de, nome, msg, hora, false]);
+    Logger.log('Mensagem salva com sucesso');
+    
+    return { ok: true };
+  } catch(e) {
+    Logger.log('Erro ao enviar mensagem: ' + e.message);
+    return { ok: false, erro: e.message };
+  }
+  finally { lock.releaseLock(); }
+}
+
+function obterDadosPlantao(token) {
+  _validarAcessoBackend(token);
+  try {
+    var dados = getSheet().getDataRange().getValues(), agora = new Date(), hoje = Utilities.formatDate(agora, 'GMT-3', 'dd/MM/yyyy');
+    var abertos = [], resolvidosHoje = 0, emAndamento = 0, tecnicos = {}, SLA = { 'EMERGENTE': 4, 'MUITA URGÊNCIA': 8, 'URGÊNCIA': 12, 'POUCA URGÊNCIA': 24 };
+
+    dados.slice(1).forEach(function(l) {
+      if (!l[14]) return;
+      var status = String(l[10]||'').trim(), tec = String(l[11]||'').trim();
+      if (status === 'CONCLUÍDO' && l[1] instanceof Date && Utilities.formatDate(l[1], 'GMT-3', 'dd/MM/yyyy') === hoje) resolvidosHoje++;
+      if ((status === 'ABERTO' || status === 'EM ANDAMENTO') && tec) tecnicos[tec] = (tecnicos[tec] || 0) + 1;
+      if (status !== 'ABERTO' && status !== 'EM ANDAMENTO') return;
+
+      var ts = l[0] instanceof Date ? l[0].getTime() : new Date(l[0]).getTime();
+      var dH = (agora.getTime() - ts) / 3600000, prio = String(l[8]||'').trim();
+      var lim = SLA[prio] || 24, pct = Math.round(dH / lim * 100);
+      var slaStatus = pct >= 100 ? 'critico' : pct >= 75 ? 'atrasado' : pct >= 50 ? 'atencao' : 'ok';
+      if (status === 'EM ANDAMENTO') emAndamento++;
+
+      abertos.push({ id: l[14], setor: String(l[5]||'').trim(), prioridade: prio, descricao: String(l[9]||'').trim(), nome: String(l[16]||'').trim(), tecnico: tec?tec.split(' ')[0]:'', emAndamento: status === 'EM ANDAMENTO', timestamp: ts, horasAbert: Math.floor(dH), minutos: Math.floor((dH%1)*60), slaPct: Math.min(pct,999), slaStatus: slaStatus });
+    });
+
+    abertos.sort(function(a, b) { var ordem = {critico:0,atrasado:1,atencao:2,ok:3}; return (ordem[a.slaStatus]||3)-(ordem[b.slaStatus]||3) || b.timestamp-a.timestamp; });
+    return { abertos: abertos, totalAbertos: abertos.length, emAndamento: emAndamento, resolvidosHoje: resolvidosHoje, tecnicos: tecnicos, horaServidor: Utilities.formatDate(agora, 'GMT-3', 'HH:mm:ss') };
+  } catch(e) { return { abertos: [], totalAbertos: 0, emAndamento: 0, resolvidosHoje: 0, tecnicos: {}, horaServidor: '--:--' }; }
+}
+
+function obterDadosIndicadores(filtro, token) {
+  _validarAcessoBackend(token);
+  try {
+    var dados = getSheet().getDataRange().getValues(), setores={}, naturezas={}, prioridades={}, turnos={}, dias={}, meses={}, anosSet={};
+    var total=0, totalResolvidos=0, somaHoras=0, contHoras=0, tecnicos={};
+    var ORDEM_DIAS=['Segunda-feira','Terça-feira','Quarta-feira','Quinta-feira','Sexta-feira','Sábado','Domingo'], ORDEM_PRIOS=['EMERGENTE','MUITA URGÊNCIA','URGÊNCIA','POUCA URGÊNCIA'], ORDEM_TURNOS=['DIURNO','NOTURNO'], ORDEM_MESES=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+
+    dados.slice(1).forEach(function(l) {
+      if (!l[14]) return;
+      var mesPlanilha = String(l[12]||'').trim(), anoPlanilha = String(l[13]||'').trim();
+      if (anoPlanilha) anosSet[anoPlanilha] = true;
+      if (filtro && ((filtro.mes&&filtro.mes!=='TODOS'&&mesPlanilha!==filtro.mes) || (filtro.ano&&filtro.ano!=='TODOS'&&anoPlanilha!==filtro.ano))) return;
+
+      total++;
+      var setor = String(l[5]||'').trim()||'(não informado)', nat = String(l[7]||'').trim()||'(não informado)', prio = String(l[8]||'').trim()||'(não definido)', turno = String(l[3]||'').trim()||'(não informado)', dia = String(l[2]||'').trim()||'(não informado)', status = String(l[10]||'').trim(), tec = String(l[11]||'').trim(), chaveM = (mesPlanilha||'?')+'/'+(anoPlanilha||'?');
+
+      setores[setor]=(setores[setor]||0)+1; naturezas[nat]=(naturezas[nat]||0)+1; prioridades[prio]=(prioridades[prio]||0)+1; turnos[turno]=(turnos[turno]||0)+1; dias[dia]=(dias[dia]||0)+1;
+      if (!meses[chaveM]) meses[chaveM] = { mes: mesPlanilha, ano: anoPlanilha, total: 0, idx: ORDEM_MESES.indexOf(mesPlanilha) };
+      meses[chaveM].total++;
+
+      if (status === 'CONCLUÍDO') {
+        totalResolvidos++;
+        if (tec) tecnicos[tec] = (tecnicos[tec] || 0) + 1;
+        if (l[0] instanceof Date && l[1] instanceof Date) { var diff = (l[1].getTime()-l[0].getTime())/3600000; if (diff>0 && diff<720) { somaHoras+=diff; contHoras++; } }
+      }
+    });
+
+    var evolucao = Object.values(meses).sort(function(a,b){ if(a.ano!==b.ano) return parseInt(a.ano)-parseInt(b.ano); return a.idx-b.idx; }).map(function(m){ return { label: m.mes+'/'+m.ano, total: m.total }; });
+    var tecnicoTop = '', maxTec = 0; Object.keys(tecnicos).forEach(function(t){ if(tecnicos[t]>maxTec){maxTec=tecnicos[t];tecnicoTop=t;} });
+    var ordenar = function(obj,ord){ var s={}; ord.forEach(function(k){if(obj[k])s[k]=obj[k];}); Object.keys(obj).forEach(function(k){if(!s[k])s[k]=obj[k];}); return s; };
+    var ordenarPorValor = function(obj){ return Object.keys(obj).sort(function(a,b){return obj[b]-obj[a];}).reduce(function(r,k){r[k]=obj[k];return r;},{}); };
+
+    return { total: total, totalResolvidos: totalResolvidos, pctResolvidos: total>0?Math.round(totalResolvidos/total*100):0, tempoMedioHoras: contHoras>0?Math.round(somaHoras/contHoras*10)/10:null, tecnicoTop: tecnicoTop?tecnicoTop.split(' ')[0]:'—', tecnicoTopTotal: maxTec, setores: ordenarPorValor(setores), naturezas: ordenarPorValor(naturezas), prioridades: ordenar(prioridades, ORDEM_PRIOS), turnos: ordenar(turnos, ORDEM_TURNOS), dias: ordenar(dias, ORDEM_DIAS), evolucao: evolucao, anosDisponiveis: Object.keys(anosSet).sort() };
+  } catch(e) { return { total:0, totalResolvidos:0, pctResolvidos:0, tempoMedioHoras:null, tecnicoTop:'—', tecnicoTopTotal:0, setores:{}, naturezas:{}, prioridades:{}, turnos:{}, dias:{}, evolucao:[], anosDisponiveis:[] }; }
+}
+
+function exportarParaSlides(filtro, token) {
+  _validarAcessoBackend(token);
+  try {
+    var d = obterDadosIndicadores(filtro, token), mes = (filtro && filtro.mes !== 'TODOS') ? filtro.mes : 'Todos os meses', ano = (filtro && filtro.ano !== 'TODOS') ? filtro.ano : 'Todos os anos', periodo = mes + (mes !== 'Todos os meses' || ano !== 'Todos os anos' ? ' / ' + ano : ''), dataHoje = Utilities.formatDate(new Date(), 'GMT-3', 'dd/MM/yyyy');
+    var pres = SlidesApp.create('Indicadores TI SAMU 192 — ' + dataHoje), slides = pres.getSlides(), capa = slides[0];
+    capa.getBackground().setSolidFill(13, 27, 42);
+    capa.insertTextBox('SAMU 192\nIndicadores TI', 60, 80, 760, 120).getText().getTextStyle().setForegroundColor('#FFFFFF').setFontSize(36).setBold(true);
+    capa.insertTextBox('Período: ' + periodo + '   ·   Gerado em ' + dataHoje, 60, 210, 760, 40).getText().getTextStyle().setForegroundColor('#8DA0B8').setFontSize(14);
+    capa.insertTextBox(d.total + ' chamados registrados', 60, 260, 760, 50).getText().getTextStyle().setForegroundColor('#E53935').setFontSize(20).setBold(true);
+    pres.saveAndClose();
+    return { ok: true, url: 'https://docs.google.com/presentation/d/' + pres.getId() + '/edit' };
+  } catch (e) { return { ok: false, erro: e.message }; }
+}
